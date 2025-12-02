@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Auth System</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Security Access</h1>
+            <p>Identity Verification System</p>
+        </header>
+        
+        <main>
+            <div class="camera-container">
+                <video id="video" autoplay playsinline></video>
+                <canvas id="canvas" style="display:none;"></canvas>
+                <div class="overlay"></div>
+            </div>
+
+            <div class="controls">
+                <button id="capture-btn" class="btn primary">Verify Identity</button>
+            </div>
+
+            <div id="result" class="result-card hidden">
+                <div class="loader hidden" id="loader"></div>
+                <div id="status-content">
+                    <h2 id="person-name"></h2>
+                    <p id="confidence-score"></p>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
