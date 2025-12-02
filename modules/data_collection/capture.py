@@ -3,16 +3,38 @@ import os
 import time
 
 def capture_images(name, num_images=50):
-    base_dir = f"dataset/{name}"
+    # Fix: Use absolute path to the root 'dataset' folder
+    # Script is in modules/data_collection, so root is ../../
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, "../../"))
+    base_dir = os.path.join(project_root, "dataset", name)
+    
     if not os.path.exists(base_dir):
         os.makedirs(base_dir)
 
-    cap = cv2.VideoCapture(0)
+    print("Attempting to open webcam...")
+    # Use CAP_DSHOW for Windows to avoid hanging
+    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
     if not cap.isOpened():
         print("Error: Could not open webcam.")
         return
 
-    print(f"Starting capture for {name}. Press 'q' to quit early.")
+    # Find the next available index
+    existing_files = [f for f in os.listdir(base_dir) if f.startswith(name) and f.endswith(".jpg")]
+    start_count = 0
+    if existing_files:
+        indices = []
+        for f in existing_files:
+            try:
+                # Extract number from "Name_123.jpg"
+                idx = int(f.split('_')[-1].split('.')[0])
+                indices.append(idx)
+            except ValueError:
+                continue
+        if indices:
+            start_count = max(indices) + 1
+            
+    print(f"Starting capture for {name} from index {start_count}. Press 'q' to quit early.")
     print("Get ready...")
     time.sleep(2)
 
@@ -27,7 +49,8 @@ def capture_images(name, num_images=50):
         cv2.imshow('Frame', frame)
 
         # Save frame
-        img_name = os.path.join(base_dir, f"{name}_{count}.jpg")
+        current_idx = start_count + count
+        img_name = os.path.join(base_dir, f"{name}_{current_idx}.jpg")
         cv2.imwrite(img_name, frame)
         print(f"Saved {img_name}")
         count += 1

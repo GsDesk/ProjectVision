@@ -22,7 +22,7 @@ face_cascade = None
 
 @app.on_event("startup")
 async def load_resources():
-    global model, face_cascade
+    global model, face_cascade, profile_cascade, face_cascade_alt
     if os.path.exists(MODEL_PATH):
         try:
             model = tf.keras.models.load_model(MODEL_PATH)
@@ -32,8 +32,13 @@ async def load_resources():
     
     try:
         cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        cascade_alt_path = cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml'
+        profile_path = cv2.data.haarcascades + 'haarcascade_profileface.xml'
+        
         face_cascade = cv2.CascadeClassifier(cascade_path)
-        print("✅ DETECTOR OPENCV CARGADO")
+        face_cascade_alt = cv2.CascadeClassifier(cascade_alt_path)
+        profile_cascade = cv2.CascadeClassifier(profile_path)
+        print("✅ DETECTORES OPENCV CARGADO")
     except Exception as e:
         print(f"❌ Error Detector: {e}")
 
@@ -56,7 +61,7 @@ async def predict(file: UploadFile = File(...)):
         
         # --- CORRECCIÓN DE ETIQUETAS ---
         # Invertimos el orden para corregir el cruce de identidades
-        classes = ["Oscar", "Alex"]
+        classes = ["Alex", "Oscar"]
         
         # Umbral estricto para Login
         result = classes[class_index] if confidence > 0.85 else "Desconocido"
@@ -80,19 +85,80 @@ async def predict_live(file: UploadFile = File(...)):
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         gray_enhanced = clahe.apply(gray_blurred)
 
-        # Detector MUY estricto para eliminar fantasmas
-        # minNeighbors=20: Requiere muchas coincidencias para validar una cara
-        # minSize=(100, 100): Ignora cosas pequeñas o lejanas que suelen ser ruido
-        faces = face_cascade.detectMultiScale(
+        # 1. Frontal Face (Default)
+        faces_frontal = face_cascade.detectMultiScale(
             gray_enhanced, 
             scaleFactor=1.1, 
-            minNeighbors=20, 
+            minNeighbors=15, 
+            minSize=(100, 100)
+        )
+
+        # 2. Frontal Face (Alt2) - Better for different angles/looking down
+        faces_frontal_alt = face_cascade_alt.detectMultiScale(
+            gray_enhanced,
+            scaleFactor=1.1,
+            minNeighbors=10,
             minSize=(100, 100)
         )
         
+        # 3. Profile Face
+        faces_profile = profile_cascade.detectMultiScale(
+            gray_enhanced,
+            scaleFactor=1.1,
+            minNeighbors=8,
+            minSize=(100, 100)
+        )
+        
+        # 4. Flipped Profile Face
+        flipped_gray = cv2.flip(gray_enhanced, 1)
+        faces_flipped = profile_cascade.detectMultiScale(
+            flipped_gray,
+            scaleFactor=1.1,
+            minNeighbors=8,
+            minSize=(100, 100)
+        )
+        
+        # Combine detections
+        all_faces = []
+        
+        # Add frontal
+        for f in faces_frontal:
+            all_faces.append(f)
+
+        # Add frontal alt
+        for f in faces_frontal_alt:
+            all_faces.append(f)
+            
+        # Add profile
+        for f in faces_profile:
+            all_faces.append(f)
+            
+        # Add flipped profile (adjust coords)
+        h_img, w_img = gray.shape
+        for (x, y, w, h) in faces_flipped:
+            x_orig = w_img - x - w
+            all_faces.append((x_orig, y, w, h))
+            
+        # Simple NMS (Non-Maximum Suppression) to remove duplicates
+        if len(all_faces) > 0:
+            # Use area as score to prefer larger faces
+            scores = [float(w * h) for (x, y, w, h) in all_faces]
+            
+            # nms_threshold=0.3: suppress if IoU > 0.3
+            indices = cv2.dnn.NMSBoxes(all_faces, scores, score_threshold=0.0, nms_threshold=0.3)
+            
+            final_faces = []
+            if len(indices) > 0:
+                # indices returns a numpy array, flatten it to iterate
+                for i in indices.flatten():
+                    final_faces.append(all_faces[i])
+            all_faces = final_faces
+        
         detections = []
-        for (x, y, w, h) in faces:
+        for (x, y, w, h) in all_faces:
             roi_color = frame[y:y+h, x:x+w]
+            if roi_color.size == 0: continue
+            
             roi_resized = cv2.resize(roi_color, (128, 128))
             roi_normalized = roi_resized / 255.0
             roi_expanded = np.expand_dims(roi_normalized, axis=0)
@@ -102,7 +168,7 @@ async def predict_live(file: UploadFile = File(...)):
             confidence = float(np.max(prediction))
             
             # --- CORRECCIÓN DE ETIQUETAS ---
-            classes = ["Oscar", "Alex"]
+            classes = ["Alex", "Oscar"]
             
             # Umbral de confianza 85% para filtrar desconocidos
             name = classes[class_index] if confidence > 0.85 else "Desconocido"
