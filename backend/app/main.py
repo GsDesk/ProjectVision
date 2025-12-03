@@ -49,9 +49,40 @@ async def predict(file: UploadFile = File(...)):
     try:
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        img = cv2.resize(img, (128, 128))
+        # Filtros
+        gray_blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        gray_enhanced = clahe.apply(gray_blurred)
+
+        # Detect Faces (Same logic as Live)
+        faces_frontal = face_cascade.detectMultiScale(gray_enhanced, 1.1, 15, minSize=(100, 100))
+        faces_frontal_alt = face_cascade_alt.detectMultiScale(gray_enhanced, 1.1, 10, minSize=(100, 100))
+        faces_profile = profile_cascade.detectMultiScale(gray_enhanced, 1.1, 8, minSize=(100, 100))
+        flipped_gray = cv2.flip(gray_enhanced, 1)
+        faces_flipped = profile_cascade.detectMultiScale(flipped_gray, 1.1, 8, minSize=(100, 100))
+
+        all_faces = []
+        for f in faces_frontal: all_faces.append(f)
+        for f in faces_frontal_alt: all_faces.append(f)
+        for f in faces_profile: all_faces.append(f)
+        h_img, w_img = gray.shape
+        for (x, y, w, h) in faces_flipped:
+            x_orig = w_img - x - w
+            all_faces.append((x_orig, y, w, h))
+
+        if len(all_faces) == 0:
+            return {"error": "No se detectó ningún rostro. Intenta acercarte más o mejorar la luz."}
+
+        # Select the largest face
+        best_face = max(all_faces, key=lambda r: r[2] * r[3])
+        x, y, w, h = best_face
+        
+        # Crop
+        face_img = frame[y:y+h, x:x+w]
+        img = cv2.resize(face_img, (128, 128))
         img = img / 255.0
         img = np.expand_dims(img, axis=0)
         
@@ -60,7 +91,6 @@ async def predict(file: UploadFile = File(...)):
         confidence = float(np.max(prediction))
         
         # --- CORRECCIÓN DE ETIQUETAS ---
-        # Invertimos el orden para corregir el cruce de identidades
         classes = ["Alex", "Oscar"]
         
         # Umbral estricto para Login

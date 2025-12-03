@@ -2,14 +2,16 @@ import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from sklearn.utils import class_weight
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 
 # Constants
 IMG_HEIGHT = 128
 IMG_WIDTH = 128
 BATCH_SIZE = 32
-EPOCHS = 20
+EPOCHS = 30  # Increased epochs
 
 # Paths relative to this script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,12 +25,16 @@ def train_model():
         return
 
     # Data Augmentation and Loading
+    # Increased augmentation to help with generalization
     train_datagen = ImageDataGenerator(
         rescale=1./255,
-        rotation_range=20,
+        rotation_range=30,
         width_shift_range=0.2,
         height_shift_range=0.2,
+        shear_range=0.2,
+        zoom_range=0.2,
         horizontal_flip=True,
+        fill_mode='nearest',
         validation_split=0.2
     )
 
@@ -54,6 +60,15 @@ def train_model():
         print("No images found. Please run data collection first.")
         return
 
+    # Calculate Class Weights to handle imbalance
+    class_weights = class_weight.compute_class_weight(
+        class_weight='balanced',
+        classes=np.unique(train_generator.classes),
+        y=train_generator.classes
+    )
+    class_weights_dict = dict(enumerate(class_weights))
+    print(f"Class Weights: {class_weights_dict}")
+
     # Model Architecture
     # Model Architecture with MobileNetV2 (Transfer Learning)
     base_model = tf.keras.applications.MobileNetV2(input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
@@ -65,11 +80,11 @@ def train_model():
         base_model,
         tf.keras.layers.GlobalAveragePooling2D(),
         Dense(128, activation='relu'),
-        Dropout(0.5),
+        Dropout(0.6), # Increased dropout to reduce overfitting
         Dense(train_generator.num_classes, activation='softmax') # Use softmax for multi-class
     ])
 
-    model.compile(optimizer='adam',
+    model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), # Lower learning rate
                   loss='categorical_crossentropy',
                   metrics=['accuracy'])
     
@@ -87,7 +102,8 @@ def train_model():
         steps_per_epoch=train_generator.samples // BATCH_SIZE,
         validation_data=validation_generator,
         validation_steps=validation_generator.samples // BATCH_SIZE,
-        epochs=EPOCHS
+        epochs=EPOCHS,
+        class_weight=class_weights_dict
     )
 
     # Save Model

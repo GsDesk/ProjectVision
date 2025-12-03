@@ -18,7 +18,7 @@ def process_dataset():
     face_cascade = cv2.CascadeClassifier(cascade_path)
     profile_cascade = cv2.CascadeClassifier(profile_cascade_path)
 
-    classes = ['Alex', 'Oscar']
+    classes = ['Alex', 'Oscar', 'Unknown']
     
     total_processed = 0
     total_faces = 0
