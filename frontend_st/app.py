@@ -7,8 +7,8 @@ from streamlit_webrtc import webrtc_streamer, VideoTransformerBase
 
 st.set_page_config(page_title="Sistema ROG Vision", page_icon="👁️", layout="wide")
 
-API_LOGIN = "http://host.docker.internal:8000/predict"
-API_LIVE = "http://host.docker.internal:8000/predict_live"
+API_LOGIN = "http://api-vision:8000/predict"
+API_LIVE = "http://api-vision:8000/predict_live"
 
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False

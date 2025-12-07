@@ -11,7 +11,7 @@ import os
 IMG_HEIGHT = 128
 IMG_WIDTH = 128
 BATCH_SIZE = 32
-EPOCHS = 30  # Increased epochs
+EPOCHS = 50  # Increased epochs for better convergence
 
 # Paths relative to this script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,27 +61,34 @@ def train_model():
         return
 
     # Calculate Class Weights to handle imbalance
-    class_weights = class_weight.compute_class_weight(
-        class_weight='balanced',
-        classes=np.unique(train_generator.classes),
-        y=train_generator.classes
-    )
-    class_weights_dict = dict(enumerate(class_weights))
-    print(f"Class Weights: {class_weights_dict}")
+    # REMOVED AUTOMATIC WEIGHTING to avoid overfitting to the tiny 'Unknown' class.
+    # The 'Unknown' class has very few images, causing massive weights (e.g. 23x) which
+    # forces the model to predict 'Unknown' incorrectly.
+    # We will rely on the confidence threshold to reject unknown faces.
+    class_weights_dict = {0: 1.0, 1: 1.0, 2: 1.0} 
+    print(f"Class Weights (Manual): {class_weights_dict}")
 
     # Model Architecture
-    # Model Architecture with MobileNetV2 (Transfer Learning)
+    # Model Architecture with MobileNetV2 (Transfer Learning & Fine Tuning)
     base_model = tf.keras.applications.MobileNetV2(input_shape=(IMG_HEIGHT, IMG_WIDTH, 3),
                                                    include_top=False,
                                                    weights='imagenet')
-    base_model.trainable = False # Freeze base model
+    
+    # Fine Tuning: Unfreeze the top layers of the model
+    base_model.trainable = True
+    
+    # Freeze the bottom layers (generic features) and unfreeze top layers (specific features)
+    # MobileNetV2 has 155 layers total. Let's unfreeze the last 40.
+    fine_tune_at = 115
+    for layer in base_model.layers[:fine_tune_at]:
+        layer.trainable = False
 
     model = Sequential([
         base_model,
         tf.keras.layers.GlobalAveragePooling2D(),
-        Dense(128, activation='relu'),
-        Dropout(0.6), # Increased dropout to reduce overfitting
-        Dense(train_generator.num_classes, activation='softmax') # Use softmax for multi-class
+        Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.01)), # Added L2 regularization
+        Dropout(0.5), # Standard dropout
+        Dense(train_generator.num_classes, activation='softmax')
     ])
 
     model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), # Lower learning rate

@@ -22,7 +22,7 @@ def test_model():
         print(f"❌ Error cargando modelo: {e}")
         return
 
-    classes = ["Alex", "Oscar"]
+    classes = ["Alex", "Oscar", "Unknown"]
     
     # Test one image from each class
     for name in classes:
@@ -53,11 +53,25 @@ def test_model():
         pred = model.predict(img_batch, verbose=0)
         idx = np.argmax(pred)
         conf = np.max(pred)
-        predicted_name = classes[idx]
+        predicted_raw = classes[idx]
+        
+        # Apply Strict Logic
+        final_decision = predicted_raw
+        if predicted_raw == "Unknown":
+            final_decision = "Unknown"
+        elif conf < 0.93:
+            final_decision = "Unknown (Low Conf)"
         
         # Result
-        status = "✅ CORRECTO" if predicted_name == name else "❌ INCORRECTO"
-        print(f"Prueba con foto de {name}: Predicción -> {predicted_name} ({conf:.1%}) {status}")
+        # For Unknown class, we expect Unknown
+        expected = name
+        if name == "Unknown":
+            is_correct = "Unknown" in final_decision
+        else:
+            is_correct = (final_decision == name)
+            
+        status = "✅ CORRECTO" if is_correct else "❌ INCORRECTO"
+        print(f"Prueba con foto de {name}: Predicción -> {predicted_raw} ({conf:.1%}) -> Final: {final_decision} {status}")
 
 if __name__ == "__main__":
     test_model()
