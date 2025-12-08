@@ -19,13 +19,30 @@ DATA_DIR = os.path.join(BASE_DIR, '../data_collection/dataset_cropped')
 MODEL_SAVE_PATH = os.path.join(BASE_DIR, '../models/face_recognition_model.h5')
 INDICES_SAVE_PATH = os.path.join(BASE_DIR, '../models/class_indices.json')
 
+def add_random_occlusion(image):
+    """
+    Agrega un recuadro negro aleatorio para simular oclusiones (taparse la cara).
+    Se aplica aleatoriamente al 50% de las imágenes.
+    """
+    if np.random.random() > 0.5:
+        return image
+    
+    h, w, _ = image.shape
+    mask_size = np.random.randint(30, 60) # Tamaño del parche (30-60px)
+    
+    top = np.random.randint(0, h - mask_size)
+    left = np.random.randint(0, w - mask_size)
+    
+    image[top:top+mask_size, left:left+mask_size, :] = 0 # Parche negro
+    return image
+
 def train_model():
     if not os.path.exists(DATA_DIR):
         print(f"Data directory {DATA_DIR} not found.")
         return
 
     # Data Augmentation and Loading
-    # Increased augmentation to help with generalization
+    # Increased augmentation + Occlusion to fix "Phone covering face" issues
     train_datagen = ImageDataGenerator(
         rescale=1./255,
         rotation_range=30,
@@ -35,24 +52,30 @@ def train_model():
         zoom_range=0.2,
         horizontal_flip=True,
         fill_mode='nearest',
+        preprocessing_function=add_random_occlusion, # Simula objetos tapando la cara
         validation_split=0.2
     )
 
+    # DEFINIR ORDEN FIJO DE CLASES PARA ROBUSTEZ (Evita cambios de ID)
+    FIXED_CLASSES = ['Alex', 'Oscar', 'Unknown']
+    
     train_generator = train_datagen.flow_from_directory(
         DATA_DIR,
         target_size=(IMG_HEIGHT, IMG_WIDTH),
         batch_size=BATCH_SIZE,
         class_mode='categorical',
+        classes=FIXED_CLASSES, # <--- FORZAR ORDEN
         subset='training'
     )
     
-    print("Class Indices: ", train_generator.class_indices)
+    print("Class Indices (Fixed): ", train_generator.class_indices)
 
     validation_generator = train_datagen.flow_from_directory(
         DATA_DIR,
         target_size=(IMG_HEIGHT, IMG_WIDTH),
         batch_size=BATCH_SIZE,
         class_mode='categorical',
+        classes=FIXED_CLASSES, # <--- FORZAR ORDEN
         subset='validation'
     )
 
@@ -95,11 +118,47 @@ def train_model():
                   loss='categorical_crossentropy',
                   metrics=['accuracy'])
     
-    # Save class indices
+    # Save class indices (Robust Format)
     import json
+    
+    robust_indices = {}
+    old_indices = {}
+
+    # Try to load existing config to preserve thresholds
+    if os.path.exists(INDICES_SAVE_PATH):
+        try:
+            with open(INDICES_SAVE_PATH, 'r') as f:
+                content = json.load(f)
+                # Check if it's the new format
+                if content and isinstance(list(content.values())[0], dict):
+                    old_indices = content
+        except:
+            pass
+
+    for name, index in train_generator.class_indices.items():
+        str_index = str(index)
+        
+        # Default threshold
+        current_threshold = 0.80
+        
+        # Search in old config to preserve custom thresholds
+        for key, val in old_indices.items():
+            if isinstance(val, dict) and val.get("name") == name:
+                current_threshold = val.get("threshold", 0.80)
+                break
+        
+        # Hardcode strictness for Unknown
+        if name == "Unknown": 
+            current_threshold = 1.0
+        
+        robust_indices[str_index] = {
+            "name": name,
+            "threshold": current_threshold
+        }
+
     with open(INDICES_SAVE_PATH, 'w') as f:
-        json.dump(train_generator.class_indices, f)
-    print(f"Class indices saved to {INDICES_SAVE_PATH}")
+        json.dump(robust_indices, f, indent=4)
+    print(f"Class indices saved to {INDICES_SAVE_PATH} (Robust Format)")
 
     model.summary()
 

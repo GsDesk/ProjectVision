@@ -1,1 +1,14 @@
-{"Alex": 0, "Oscar": 1, "Unknown": 2}
+{
+    "0": {
+        "name": "Alex",
+        "threshold": 0.7
+    },
+    "1": {
+        "name": "Oscar",
+        "threshold": 0.85
+    },
+    "2": {
+        "name": "Unknown",
+        "threshold": 1.0
+    }
+}

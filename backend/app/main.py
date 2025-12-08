@@ -5,6 +5,7 @@ import numpy as np
 import cv2
 import tensorflow as tf
 import os
+import json
 
 app = FastAPI()
 
@@ -17,8 +18,11 @@ app.add_middleware(
 )
 
 MODEL_PATH = "/app/modules/models/face_recognition_model.h5"
+CLASSES_PATH = "/app/modules/models/class_indices.json"
+
 model = None
 face_cascade = None
+profile_cascade = None
 
 @app.on_event("startup")
 async def load_resources():
@@ -52,129 +56,144 @@ def predecir_imagen(img):
     class_index = np.argmax(prediction)
     confidence = float(np.max(prediction))
     
-    # Intentar cargar índices dinámicos
-    import json
-    CLASSES_PATH = "/app/modules/models/class_indices.json"
-    classes = []
+    # Valores por defecto
+    nombre_detectado = "Desconocido"
+    umbral_personalizado = 0.80 # Fallback por defecto
     
     if os.path.exists(CLASSES_PATH):
         try:
             with open(CLASSES_PATH, 'r') as f:
-                indices = json.load(f)
-                # indices es {'Alex': 0, 'Oscar': 1, ...} -> invertir a [0: 'Alex', ...]
-                classes_dict = {v: k for k, v in indices.items()}
-                classes = [classes_dict[i] for i in range(len(classes_dict))]
-        except Exception as e:
-            print(f"Error cargando indices: {e}")
-            classes = ["Alex", "Oscar", "Desconocido"]
-    else:
-        classes = ["Alex", "Oscar", "Desconocido"]
-    
-    if not classes:
-         classes = ["Alex", "Oscar", "Desconocido"]
+                config_indices = json.load(f)
+                
+            # El JSON ahora es: {"0": {"name": "Alex", "threshold": 0.70}, ...}
+            key = str(class_index)
+            if key in config_indices:
+                data = config_indices[key]
+                nombre_detectado = data.get("name", "Desconocido")
+                umbral_personalizado = data.get("threshold", 0.80)
+            else:
+                # Fallback para formato antiguo o indices rotos
+                nombre_detectado = "Desconocido"
 
-    # 0=Alex, 1=Oscar, 2=Unknown (Por defecto)
+        except Exception as e:
+            print(f"Error cargando indices json: {e}")
+            nombre_detectado = "Desconocido"
     
-    nombre_detectado = classes[class_index]
+    # 0=Alex, 1=Oscar, 2=Unknown
     
     # Lógica de seguridad estricta:
-    # 1. Si el modelo dice explícitamente "Desconocido" -> Es Desconocido.
-    # 2. Si la confianza es menor a 0.93 (93%) -> Es Desconocido.
-    # 3. Verificamos el margen con la segunda mejor opción para evitar ambigüedad.
-    
     sorted_prediction = np.sort(prediction[0])
     top_score = sorted_prediction[-1]
     second_score = sorted_prediction[-2]
     margin = top_score - second_score
 
-    # Umbrales
-    # Umbrales Estrictos Actualizados
-    # Umbrales Estrictos (Ajustados para usabilidad)
-    # Umbrales (Ajustados para permitir acceso con ~80%)
-    UMBRAL_CONFIANZA = 0.75  
     UMBRAL_MARGEN = 0.15
 
-    if nombre_detectado == "Desconocido":
+    if nombre_detectado == "Unknown" or nombre_detectado == "Desconocido":
         return "Desconocido", confidence
     
-    # Verificación estricta
-    if confidence >= UMBRAL_CONFIANZA and margin >= UMBRAL_MARGEN:
+    # Verificación estricta con UMBRAL DINÁMICO
+    if confidence >= umbral_personalizado and margin >= UMBRAL_MARGEN:
         return nombre_detectado, confidence
     else:
-        # Si no cumple los requisitos estrictos, se marca como Desconocido
         return "Desconocido", confidence
+
+def detect_faces_multiscale(frame):
+    """
+    Función auxiliar para detectar caras usando cascadas múltiples (Frontal + Perfil).
+    Devuelve una lista de recuadros [x, y, w, h] sin solapamientos.
+    """
+    if face_cascade is None or profile_cascade is None:
+        return []
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Filtros visuales para mejorar detección
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    gray = clahe.apply(gray)
+
+    # Parametros de detección
+    scale_factor = 1.1
+    min_neighbors = 8 
+    min_size = (60, 60)
+
+    # 1. Frontal
+    faces_frontal = face_cascade.detectMultiScale(gray, scale_factor, min_neighbors, minSize=min_size)
+    
+    # 2. Perfil Izquierdo
+    faces_profile = profile_cascade.detectMultiScale(gray, scale_factor, min_neighbors, minSize=min_size)
+    
+    # 3. Perfil Derecho (Flip)
+    flipped_gray = cv2.flip(gray, 1)
+    faces_profile_flipped = profile_cascade.detectMultiScale(flipped_gray, scale_factor, min_neighbors, minSize=min_size)
+    
+    # Combinar detecciones
+    all_faces = []
+    
+    for (x, y, w, h) in faces_frontal:
+        all_faces.append([x, y, w, h])
+        
+    for (x, y, w, h) in faces_profile:
+        all_faces.append([x, y, w, h])
+        
+    h_img, w_img = gray.shape
+    for (x, y, w, h) in faces_profile_flipped:
+        x_orig = w_img - x - w
+        all_faces.append([x_orig, y, w, h])
+
+    # Non-Maximum Suppression (NMS)
+    if len(all_faces) > 0:
+        all_faces_rects = list(all_faces)
+        all_faces_rects.append(all_faces_rects[0]) # Dummy para groupRectangles
+        rects, weights = cv2.groupRectangles(all_faces_rects, 1, 0.2)
+        return rects
+    else:
+        return []
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
+    """ Endpoint para Login (una sola imagen) """
     if model is None: return {"error": "Modelo no listo"}
     try:
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        nombre, conf = predecir_imagen(img)
-        return {"class": nombre, "person": nombre, "confidence": conf}
+        
+        # 1. Detectar caras primero
+        rects = detect_faces_multiscale(img)
+        
+        if len(rects) > 0:
+            # Seleccionar la cara más grande (mayor área)
+            x, y, w, h = max(rects, key=lambda b: b[2] * b[3])
+            
+            # Recortar ROI
+            if w > 0 and h > 0:
+                roi = img[y:y+h, x:x+w]
+                nombre, conf = predecir_imagen(roi)
+                return {"class": nombre, "person": nombre, "confidence": conf}
+        
+        # Si no se detecta nada, devolvemos Desconocido.
+        # Enviar la imagen completa (fondo + cuerpo) al modelo suele dar resultados basura.
+        return {"class": "Desconocido", "person": "Desconocido", "confidence": 0.0}
+
     except Exception as e:
         return {"error": str(e)}
 
 @app.post("/predict_live")
 async def predict_live(file: UploadFile = File(...)):
+    """ Endpoint para Detección en Vivo (Stream de video) """
     if model is None: return {"error": "Sistema no listo"}
     try:
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # Filtros visuales
-        gray = cv2.GaussianBlur(gray, (5, 5), 0)
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        gray = clahe.apply(gray)
-
-        # Multiscale detection parameters
-        scale_factor = 1.1
-        min_neighbors = 8 # Slightly less strict than 12 to catch profiles
-        min_size = (60, 60)
-
-        # 1. Frontal Detection
-        faces_frontal = face_cascade.detectMultiScale(gray, scale_factor, min_neighbors, minSize=min_size)
-        
-        # 2. Profile Detection (Left)
-        faces_profile = profile_cascade.detectMultiScale(gray, scale_factor, min_neighbors, minSize=min_size)
-        
-        # 3. Profile Detection (Right - via Flip)
-        flipped_gray = cv2.flip(gray, 1)
-        faces_profile_flipped = profile_cascade.detectMultiScale(flipped_gray, scale_factor, min_neighbors, minSize=min_size)
-        
-        # Combine detections
-        all_faces = []
-        
-        # Add Frontal
-        for (x, y, w, h) in faces_frontal:
-            all_faces.append([x, y, w, h])
-            
-        # Add Profile
-        for (x, y, w, h) in faces_profile:
-            all_faces.append([x, y, w, h])
-            
-        # Add Flipped Profile (Transform coords back)
-        h_img, w_img = gray.shape
-        for (x, y, w, h) in faces_profile_flipped:
-            x_orig = w_img - x - w
-            all_faces.append([x_orig, y, w, h])
-
-        # Basic Non-Maximum Suppression (NMS) to remove overlapping boxes
-        # OpenCV groupRectangles is robust for this
-        if len(all_faces) > 0:
-            all_faces_rects = list(all_faces)
-            all_faces_rects.append(all_faces_rects[0]) # Dummy for groupRectangles quirks sometimes
-            rects, weights = cv2.groupRectangles(all_faces_rects, 1, 0.2)
-        else:
-            rects = []
+        rects = detect_faces_multiscale(frame)
 
         detections = []
         for (x, y, w, h) in rects:
             roi = frame[y:y+h, x:x+w]
-            # Ensure ROI is valid
             if roi.size == 0: continue
             
             nombre, conf = predecir_imagen(roi)
@@ -185,8 +204,6 @@ async def predict_live(file: UploadFile = File(...)):
             })
             
         return {"faces": detections}
-    except Exception as e:
-        return {"error": str(e)}
     except Exception as e:
         return {"error": str(e)}
 
